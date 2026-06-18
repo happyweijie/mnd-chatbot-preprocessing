@@ -45,6 +45,8 @@ cd preprocessing
 python -m pip install -r requirements.txt
 ```
 
+**Note:** Uses `pydantic-ai-slim[openai]` for lightweight embeddings support (embeddings only, no agents).
+
 ## Choose Your Script
 
 | Script | Chunking Strategy | Environment | When to Use |
