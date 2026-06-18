@@ -4,6 +4,7 @@ Implements 4-phase pipeline: base articles, flattened topics, RAG chunks, embedd
 Uses Pydantic AI's Embedder for consistency with chatbot.
 """
 import argparse
+import asyncio
 import os
 from pathlib import Path
 
@@ -32,8 +33,8 @@ def create_embedder(api_key, base_url=None):
     return embedder
 
 
-def embed_texts_with_pydantic_ai(texts, embedder, batch_size=64):
-    """Embed texts using Pydantic AI's Embedder."""
+async def embed_texts_with_pydantic_ai(texts, embedder, batch_size=64):
+    """Embed texts using Pydantic AI's Embedder (async)."""
     all_embeddings = []
     total = len(texts)
 
@@ -46,7 +47,7 @@ def embed_texts_with_pydantic_ai(texts, embedder, batch_size=64):
 
         try:
             print(f"[DEBUG] Calling Pydantic AI embedder...", flush=True)
-            embeddings = embedder.embed_batch(batch)
+            embeddings = await embedder.embed_documents(batch)
             all_embeddings.extend(embeddings)
             print(f"[INFO] Embedded {min(i + batch_size, total)}/{total}")
         except Exception as e:
@@ -146,11 +147,11 @@ def main():
             raise
 
         print("[INFO] Creating embeddings...")
-        embeddings = embed_texts_with_pydantic_ai(
+        embeddings = asyncio.run(embed_texts_with_pydantic_ai(
             rag_chunks[RETRIEVAL_TEXT_COL].tolist(),
             embedder=embedder,
             batch_size=args.batch_size,
-        )
+        ))
 
         print("[INFO] Adding embeddings to chunks...")
         rag_chunks["embedding"] = [emb.tolist() for emb in embeddings]
