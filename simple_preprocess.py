@@ -1,5 +1,7 @@
 """
 Simple preprocessing without tiktoken. No network dependencies, works offline.
+Implements 4-phase pipeline: base articles, flattened topics, RAG chunks, embeddings.
+Uses Pydantic AI's Embedder for consistency with chatbot.
 """
 import argparse
 import os
@@ -8,105 +10,30 @@ from pathlib import Path
 import boto3
 import pandas as pd
 import numpy as np
-from openai import OpenAI
+from pydantic_ai.models.openai import OpenAIEmbeddingModel, OpenAIProvider
+from pydantic_ai.embedders import Embedder, EmbeddingSettings
 
 from src.preprocessing.storage import load_dataframe
-from src.preprocessing.data_cleaning import flatten_df, normalise_fields
-from src.utils.columns import (
-    ARTICLE_ID_KEY_COL,
-    ARTICLE_TOPIC_KEY_COL,
-    CHUNK_ID_COL,
-    CONTENT_CHUNK_COL,
-    CONTENT_COL,
-    EXPLANATION_COL,
-    NEWS_SITE_COL,
-    PUBLISHED_DATE_COL,
-    QUARTER_YEAR_COL,
-    RETRIEVAL_TEXT_COL,
-    SENTIMENT_SCORE_COL,
-    TITLE_COL,
-    TOPIC_COL,
-    YEAR_COL,
-)
+from src.preprocessing.data_cleaning import clean_base_articles, flatten_base_articles
+from src.preprocessing.semantic_chunks import build_rag_chunks_from_base_articles
+from src.utils.columns import RETRIEVAL_TEXT_COL
+
+EMBEDDING_DIM = 1536
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
 
 
-def simple_chunk_by_chars(text, target_chars=3500, overlap_chars=500):
-    """Chunk by characters (~700 tokens ≈ 3500 chars). No tiktoken needed."""
-    if not text or target_chars <= 0:
-        return []
-
-    text = str(text).strip()
-    if len(text) <= target_chars:
-        return [text]
-
-    chunks = []
-    for i in range(0, len(text), target_chars):
-        chunk = text[i : i + target_chars + overlap_chars]
-        if chunk.strip():
-            chunks.append(chunk.strip())
-
-    return chunks
 
 
-def build_retrieval_prefix(row):
-    """Build metadata prefix for embedding."""
-    fields = []
-    for label, col in [
-        ("Title", TITLE_COL),
-        ("Topic", TOPIC_COL),
-        ("Published date", PUBLISHED_DATE_COL),
-        ("Year", YEAR_COL),
-        ("News site", NEWS_SITE_COL),
-        ("Sentiment score", SENTIMENT_SCORE_COL),
-        ("Topic sentiment explanation", EXPLANATION_COL),
-    ]:
-        val = getattr(row, col, None)
-        if pd.notna(val):
-            fields.append(f"{label}: {str(val).strip()}")
-
-    return "\n".join(fields)
+def create_embedder(api_key, base_url=None):
+    """Create a Pydantic AI Embedder instance."""
+    provider = OpenAIProvider(api_key=api_key, base_url=base_url)
+    model = OpenAIEmbeddingModel(OPENAI_EMBEDDING_MODEL, provider=provider)
+    embedder = Embedder(model, settings=EmbeddingSettings(dimensions=EMBEDDING_DIM))
+    return embedder
 
 
-def build_chunks_df(df):
-    """Create chunks from articles without tiktoken."""
-    print(f"[INFO] Creating chunks from {len(df)} articles...")
-    chunk_rows = []
-
-    for idx, row in enumerate(df.itertuples(index=False), 1):
-        if idx % 100 == 0:
-            print(f"[INFO] Processing article {idx}/{len(df)}...", flush=True)
-
-        content = getattr(row, CONTENT_COL, "")
-        if not content:
-            continue
-
-        prefix = build_retrieval_prefix(row)
-        chunks = simple_chunk_by_chars(content)
-
-        for chunk_id, chunk_text in enumerate(chunks):
-            retrieval_text = f"{prefix}\n\nContent:\n{chunk_text}" if prefix else chunk_text
-            chunk_rows.append({
-                ARTICLE_ID_KEY_COL: getattr(row, ARTICLE_ID_KEY_COL, ""),
-                ARTICLE_TOPIC_KEY_COL: getattr(row, ARTICLE_TOPIC_KEY_COL, ""),
-                CHUNK_ID_COL: chunk_id,
-                TITLE_COL: getattr(row, TITLE_COL, ""),
-                TOPIC_COL: getattr(row, TOPIC_COL, ""),
-                YEAR_COL: getattr(row, YEAR_COL, ""),
-                QUARTER_YEAR_COL: getattr(row, QUARTER_YEAR_COL, ""),
-                NEWS_SITE_COL: getattr(row, NEWS_SITE_COL, ""),
-                PUBLISHED_DATE_COL: getattr(row, PUBLISHED_DATE_COL, ""),
-                SENTIMENT_SCORE_COL: getattr(row, SENTIMENT_SCORE_COL, ""),
-                EXPLANATION_COL: getattr(row, EXPLANATION_COL, ""),
-                CONTENT_CHUNK_COL: chunk_text,
-                RETRIEVAL_TEXT_COL: retrieval_text,
-            })
-
-    print(f"[INFO] Created {len(chunk_rows)} chunks")
-    return pd.DataFrame(chunk_rows)
-
-
-def embed_batched(texts, client, model="text-embedding-3-small", batch_size=64):
-    """Embed texts with OpenAI."""
+def embed_texts_with_pydantic_ai(texts, embedder, batch_size=64):
+    """Embed texts using Pydantic AI's Embedder."""
     all_embeddings = []
     total = len(texts)
 
@@ -115,14 +42,12 @@ def embed_batched(texts, client, model="text-embedding-3-small", batch_size=64):
         batch_num = (i // batch_size) + 1
         total_batches = (total + batch_size - 1) // batch_size
 
-        print(f"[DEBUG] Batch {batch_num}/{total_batches}: {len(batch)} texts, total chars: {sum(len(str(t)) for t in batch)}")
-        print(f"[DEBUG] First text sample: {str(batch[0])[:100]}...")
+        print(f"[DEBUG] Batch {batch_num}/{total_batches}: {len(batch)} texts")
 
         try:
-            print(f"[DEBUG] Calling API...", flush=True)
-            response = client.embeddings.create(model=model, input=batch)
-            print(f"[DEBUG] Got response, processing...")
-            all_embeddings.extend([item.embedding for item in response.data])
+            print(f"[DEBUG] Calling Pydantic AI embedder...", flush=True)
+            embeddings = embedder.embed_batch(batch)
+            all_embeddings.extend(embeddings)
             print(f"[INFO] Embedded {min(i + batch_size, total)}/{total}")
         except Exception as e:
             print(f"[ERROR] Batch {batch_num} failed: {e}")
@@ -132,77 +57,98 @@ def embed_batched(texts, client, model="text-embedding-3-small", batch_size=64):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Simple preprocessing (no tiktoken)")
+    parser = argparse.ArgumentParser(description="4-Phase preprocessing pipeline (no tiktoken)")
     parser.add_argument("input_file", help="Input CSV/Excel/Parquet")
     parser.add_argument("output_dir", help="Output directory")
-    parser.add_argument("--skip-embeddings", action="store_true")
-    parser.add_argument("--batch-size", type=int, default=4, help="Embeddings batch size (use 4 for slow endpoints)")
-    parser.add_argument("--s3-bucket", help="S3 bucket")
-    parser.add_argument("--s3-prefix", help="S3 prefix")
+    parser.add_argument("--skip-embeddings", action="store_true", help="Skip embedding generation")
+    parser.add_argument("--batch-size", type=int, default=4, help="Embeddings batch size")
+    parser.add_argument("--s3-bucket", help="S3 bucket for upload")
+    parser.add_argument("--s3-prefix", help="S3 prefix for upload")
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Phase 1: Flatten and normalize
-    print("\n" + "="*60)
-    print("PHASE 1: Flattening and Normalizing")
-    print("="*60)
+    # Load raw data
+    print("\n[INFO] Loading raw data...")
     df = load_dataframe(args.input_file)
-    df = df.pipe(flatten_df).pipe(normalise_fields)
-    print(f"[OK] Loaded and flattened: {len(df)} rows")
+    print(f"[OK] Loaded {len(df)} rows")
 
-    parquet_path = output_dir / "articles.parquet"
-    df.to_parquet(parquet_path, index=False)
-    print(f"[OK] Saved to {parquet_path}")
-
-    if args.s3_bucket and args.s3_prefix:
-        s3 = boto3.client("s3")
-        s3.upload_file(str(parquet_path), args.s3_bucket, f"{args.s3_prefix}/articles.parquet")
-        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/articles.parquet")
-
-    # Phase 2: Chunk and embed
+    # Phase 1: Create unflattened base articles
     print("\n" + "="*60)
-    print("PHASE 2: Chunking and Embedding (no tiktoken)")
+    print("PHASE 1: Cleaning Base Articles (unflattened)")
     print("="*60)
-    chunks_df = build_chunks_df(df)
+    articles_base = clean_base_articles(df)
+    print(f"[OK] Cleaned {len(articles_base)} base articles")
 
-    chunks_path = output_dir / "semantic_chunks.parquet"
-    chunks_df.to_parquet(chunks_path, index=False)
-    print(f"[OK] Saved chunks to {chunks_path}")
+    base_path = output_dir / "articles_base.parquet"
+    articles_base.to_parquet(base_path, index=False)
+    print(f"[OK] Saved to {base_path}")
 
     if args.s3_bucket and args.s3_prefix:
         s3 = boto3.client("s3")
-        s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/semantic_chunks.parquet")
-        print(f"[OK] Uploaded to S3")
+        s3.upload_file(str(base_path), args.s3_bucket, f"{args.s3_prefix}/articles_base.parquet")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/articles_base.parquet")
 
+    # Phase 2: Create flattened topic-level table
+    print("\n" + "="*60)
+    print("PHASE 2: Creating Flattened Topic-Level Table")
+    print("="*60)
+    articles_flat = flatten_base_articles(articles_base)
+    print(f"[OK] Created {len(articles_flat)} article-topic pairs")
+
+    flat_path = output_dir / "article_topics_flat.parquet"
+    articles_flat.to_parquet(flat_path, index=False)
+    print(f"[OK] Saved to {flat_path}")
+
+    if args.s3_bucket and args.s3_prefix:
+        s3 = boto3.client("s3")
+        s3.upload_file(str(flat_path), args.s3_bucket, f"{args.s3_prefix}/article_topics_flat.parquet")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/article_topics_flat.parquet")
+
+    # Phase 3: Create RAG chunks
+    print("\n" + "="*60)
+    print("PHASE 3: Building RAG Chunks")
+    print("="*60)
+    rag_chunks = build_rag_chunks_from_base_articles(articles_base)
+    print(f"[OK] Created {len(rag_chunks)} RAG chunks")
+
+    chunks_path = output_dir / "rag_chunks.parquet"
+    rag_chunks.to_parquet(chunks_path, index=False)
+    print(f"[OK] Saved to {chunks_path}")
+
+    if args.s3_bucket and args.s3_prefix:
+        s3 = boto3.client("s3")
+        s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/rag_chunks.parquet")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/rag_chunks.parquet")
+
+    # Phase 4: Generate embeddings
     if not args.skip_embeddings:
+        print("\n" + "="*60)
+        print("PHASE 4: Generating Embeddings")
+        print("="*60)
+
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             print("[WARNING] OPENAI_API_KEY not set, skipping embeddings")
             return
 
         base_url = os.getenv("OPENAI_BASE_URL")
-        print(f"[DEBUG] API Key: {'***' + api_key[-10:] if api_key else 'None'}")
         print(f"[DEBUG] Base URL: {base_url or 'default (OpenAI)'}")
+        print(f"[DEBUG] Embedding model: {OPENAI_EMBEDDING_MODEL}, dimensions: {EMBEDDING_DIM}")
 
-        client = OpenAI(api_key=api_key, base_url=base_url)
-
-        print("[INFO] Testing API with single embedding...")
+        print("[INFO] Creating Pydantic AI embedder...")
         try:
-            test_response = client.embeddings.create(
-                model="text-embedding-3-small",
-                input=["test"]
-            )
-            print(f"[OK] API test successful, got embedding of size {len(test_response.data[0].embedding)}")
+            embedder = create_embedder(api_key, base_url)
+            print(f"[OK] Embedder created successfully")
         except Exception as e:
-            print(f"[ERROR] API test failed: {e}")
+            print(f"[ERROR] Failed to create embedder: {e}")
             raise
 
         print("[INFO] Creating embeddings...")
-        embeddings = embed_batched(
-            chunks_df[RETRIEVAL_TEXT_COL].tolist(),
-            client=client,
+        embeddings = embed_texts_with_pydantic_ai(
+            rag_chunks[RETRIEVAL_TEXT_COL].tolist(),
+            embedder=embedder,
             batch_size=args.batch_size,
         )
 
@@ -213,10 +159,10 @@ def main():
         if args.s3_bucket and args.s3_prefix:
             s3 = boto3.client("s3")
             s3.upload_file(str(embeddings_path), args.s3_bucket, f"{args.s3_prefix}/embeddings.npy")
-            print(f"[OK] Uploaded to S3")
+            print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/embeddings.npy")
 
     print("\n" + "="*60)
-    print("[OK] Done!")
+    print("[OK] Preprocessing pipeline complete!")
     print("="*60)
 
 

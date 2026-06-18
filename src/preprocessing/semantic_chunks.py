@@ -4,6 +4,7 @@ import pandas as pd
 
 from src.preprocessing.data_cleaning import normalise_fields
 from src.utils.columns import (
+    ARTICLE_ID_COL,
     ARTICLE_ID_KEY_COL,
     ARTICLE_TOPIC_KEY_COL,
     CHUNK_ID_COL,
@@ -19,6 +20,8 @@ from src.utils.columns import (
     SENTIMENT_SCORE_COL,
     TITLE_COL,
     TOPIC_COL,
+    TOPICS_COL,
+    URL_COL,
     YEAR_COL,
 )
 from src.preprocessing.semantic_schema import DEFAULT_EMBEDDING_MODEL
@@ -129,4 +132,106 @@ def build_semantic_chunk_dataframe(
             )
 
     print(f"[INFO] Created {len(chunk_rows)} chunks from {len(df)} articles")
+    return pd.DataFrame(chunk_rows)
+
+
+def build_retrieval_text_for_rag(title: str, topics_list: list, content_chunk: str) -> str:
+    """
+    Build retrieval_text for RAG chunks.
+    Includes: title, topics (comma-separated), and content excerpt.
+    Does NOT include: sentiment scores, explanations, IDs, URLs.
+    """
+    if not topics_list or all(pd.isna(t) for t in topics_list):
+        topics_str = ""
+    else:
+        topics_str = ", ".join(
+            str(t).strip() for t in topics_list
+            if pd.notna(t) and str(t).strip()
+        )
+
+    parts = []
+    if title:
+        parts.append(f"Title: {title}")
+    if topics_str:
+        parts.append(f"Topics: {topics_str}")
+    parts.append(f"\nArticle excerpt:\n{content_chunk}")
+
+    return "\n".join(parts)
+
+
+def build_rag_chunks_from_base_articles(
+    df: pd.DataFrame,
+    model: str = DEFAULT_EMBEDDING_MODEL,
+    target_chunk_tokens: int = 700,
+    max_chunk_tokens: int = 900,
+    overlap_tokens: int = 100,
+) -> pd.DataFrame:
+    """
+    Create RAG chunks from unflattened base articles.
+    One row per article chunk (not per article-topic).
+
+    Input: articles_base.parquet
+    Output columns:
+    - chunk_id
+    - article_id
+    - chunk_index
+    - content_chunk
+    - retrieval_text (title + topics + content excerpt)
+    - embedding (added by embedding phase)
+    - title, date, year, news_site, url, topics (for filtering/citation)
+    """
+    print(f"[INFO] Building RAG chunks from {len(df)} base articles...")
+    encoder = get_token_encoder(model)
+    df = df.copy()
+
+    # Ensure required columns exist
+    required_cols = {ARTICLE_ID_COL, TITLE_COL, CONTENT_COL, TOPICS_COL}
+    if not required_cols.issubset(df.columns):
+        missing = required_cols - set(df.columns)
+        raise ValueError(f"Missing required columns: {missing}")
+
+    chunk_rows = []
+    chunk_counter = 0
+
+    for idx, row in enumerate(df.itertuples(index=False), 1):
+        if idx % 100 == 0:
+            print(f"[INFO] Processing article {idx}/{len(df)}...", flush=True)
+
+        article_id = getattr(row, ARTICLE_ID_COL, "")
+        title = getattr(row, TITLE_COL, "")
+        content = getattr(row, CONTENT_COL, "")
+        topics_list = getattr(row, TOPICS_COL, [])
+
+        if not content or not title:
+            continue
+
+        # Chunk the content
+        content_chunks = chunk_content_by_tokens(
+            content,
+            encoder=encoder,
+            target_chunk_tokens=target_chunk_tokens,
+            max_chunk_tokens=max_chunk_tokens,
+            overlap_tokens=overlap_tokens,
+        )
+
+        for chunk_index, content_chunk in enumerate(content_chunks):
+            chunk_id = f"{article_id}:chunk_{chunk_index}"
+            retrieval_text = build_retrieval_text_for_rag(title, topics_list, content_chunk)
+
+            chunk_rows.append({
+                CHUNK_ID_COL: chunk_id,
+                ARTICLE_ID_COL: article_id,
+                "chunk_index": chunk_index,
+                CONTENT_CHUNK_COL: content_chunk,
+                RETRIEVAL_TEXT_COL: retrieval_text,
+                TITLE_COL: title,
+                PUBLISHED_DATE_COL: getattr(row, PUBLISHED_DATE_COL, None),
+                YEAR_COL: getattr(row, YEAR_COL, None),
+                NEWS_SITE_COL: getattr(row, NEWS_SITE_COL, ""),
+                URL_COL: getattr(row, URL_COL, ""),
+                TOPICS_COL: topics_list,
+            })
+            chunk_counter += 1
+
+    print(f"[INFO] Created {len(chunk_rows)} RAG chunks from {len(df)} articles")
     return pd.DataFrame(chunk_rows)
