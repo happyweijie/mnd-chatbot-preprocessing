@@ -152,14 +152,17 @@ def main():
             batch_size=args.batch_size,
         )
 
-        embeddings_path = output_dir / "embeddings.npy"
-        np.save(embeddings_path, embeddings)
-        print(f"[OK] Saved embeddings to {embeddings_path}")
+        print("[INFO] Adding embeddings to chunks...")
+        rag_chunks["embedding"] = [emb.tolist() for emb in embeddings]
+
+        chunks_path = output_dir / "rag_chunks.parquet"
+        rag_chunks.to_parquet(chunks_path, index=False)
+        print(f"[OK] Saved chunks with embeddings to {chunks_path}")
 
         if args.s3_bucket and args.s3_prefix:
             s3 = boto3.client("s3")
-            s3.upload_file(str(embeddings_path), args.s3_bucket, f"{args.s3_prefix}/embeddings.npy")
-            print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/embeddings.npy")
+            s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/rag_chunks.parquet")
+            print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/rag_chunks.parquet")
 
     print("\n" + "="*60)
     print("[OK] Preprocessing pipeline complete!")
