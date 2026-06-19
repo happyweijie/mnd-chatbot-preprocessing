@@ -98,14 +98,14 @@ def main():
     articles_flat = flatten_base_articles(articles_base)
     print(f"[OK] Created {len(articles_flat)} article-topic pairs")
 
-    flat_path = output_dir / "article_topics_flat.parquet"
+    flat_path = output_dir / "articles_flattened.parquet"
     articles_flat.to_parquet(flat_path, index=False)
     print(f"[OK] Saved to {flat_path}")
 
     if args.s3_bucket and args.s3_prefix:
         s3 = boto3.client("s3")
-        s3.upload_file(str(flat_path), args.s3_bucket, f"{args.s3_prefix}/article_topics_flat.parquet")
-        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/article_topics_flat.parquet")
+        s3.upload_file(str(flat_path), args.s3_bucket, f"{args.s3_prefix}/articles_flattened.parquet")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/articles_flattened.parquet")
 
     # Phase 3: Create RAG chunks
     print("\n" + "="*60)
