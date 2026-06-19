@@ -65,6 +65,9 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64, help="Batch size for embeddings")
     parser.add_argument("--s3-bucket", help="S3 bucket for uploading results")
     parser.add_argument("--s3-prefix", help="S3 key prefix (required with --s3-bucket)")
+    parser.add_argument("--output-base-name", default="articles_base.parquet", help="Output filename for Phase 1 (default: articles_base.parquet)")
+    parser.add_argument("--output-flat-name", default="articles_flat.parquet", help="Output filename for Phase 2 (default: articles_flat.parquet)")
+    parser.add_argument("--output-chunks-name", default="rag_chunks.parquet", help="Output filename for Phase 3-4 (default: rag_chunks.parquet)")
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
@@ -86,14 +89,14 @@ def main():
     articles_base = clean_base_articles(df)
     print(f"[OK] Cleaned {len(articles_base)} base articles")
 
-    base_path = output_dir / "articles_base.parquet"
+    base_path = output_dir / args.output_base_name
     articles_base.to_parquet(base_path, index=False)
     print(f"[OK] Saved to {base_path}")
 
     if args.s3_bucket and args.s3_prefix:
         s3 = boto3.client("s3")
-        s3.upload_file(str(base_path), args.s3_bucket, f"{args.s3_prefix}/articles_base.parquet")
-        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/articles_base.parquet")
+        s3.upload_file(str(base_path), args.s3_bucket, f"{args.s3_prefix}/{args.output_base_name}")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/{args.output_base_name}")
 
     # Phase 2: Create flattened topic-level table
     print("\n" + "="*60)
@@ -102,14 +105,14 @@ def main():
     articles_flat = flatten_base_articles(articles_base)
     print(f"[OK] Created {len(articles_flat)} article-topic pairs")
 
-    flat_path = output_dir / "articles_flattened.parquet"
+    flat_path = output_dir / args.output_flat_name
     articles_flat.to_parquet(flat_path, index=False)
     print(f"[OK] Saved to {flat_path}")
 
     if args.s3_bucket and args.s3_prefix:
         s3 = boto3.client("s3")
-        s3.upload_file(str(flat_path), args.s3_bucket, f"{args.s3_prefix}/articles_flattened.parquet")
-        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/articles_flattened.parquet")
+        s3.upload_file(str(flat_path), args.s3_bucket, f"{args.s3_prefix}/{args.output_flat_name}")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/{args.output_flat_name}")
 
     # Phase 3: Create RAG chunks
     print("\n" + "="*60)
@@ -118,14 +121,14 @@ def main():
     rag_chunks = build_rag_chunks_from_base_articles(articles_base)
     print(f"[OK] Created {len(rag_chunks)} RAG chunks")
 
-    chunks_path = output_dir / "rag_chunks.parquet"
+    chunks_path = output_dir / args.output_chunks_name
     rag_chunks.to_parquet(chunks_path, index=False)
     print(f"[OK] Saved to {chunks_path}")
 
     if args.s3_bucket and args.s3_prefix:
         s3 = boto3.client("s3")
-        s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/rag_chunks.parquet")
-        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/rag_chunks.parquet")
+        s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/{args.output_chunks_name}")
+        print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/{args.output_chunks_name}")
 
     # Phase 4: Generate embeddings
     if not args.skip_embeddings:
@@ -160,14 +163,14 @@ def main():
         print("[INFO] Adding embeddings to chunks...")
         rag_chunks["embedding"] = [emb.tolist() for emb in embeddings]
 
-        chunks_path = output_dir / "rag_chunks.parquet"
+        chunks_path = output_dir / args.output_chunks_name
         rag_chunks.to_parquet(chunks_path, index=False)
         print(f"[OK] Saved chunks with embeddings to {chunks_path}")
 
         if args.s3_bucket and args.s3_prefix:
             s3 = boto3.client("s3")
-            s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/rag_chunks.parquet")
-            print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/rag_chunks.parquet")
+            s3.upload_file(str(chunks_path), args.s3_bucket, f"{args.s3_prefix}/{args.output_chunks_name}")
+            print(f"[OK] Uploaded to S3: s3://{args.s3_bucket}/{args.s3_prefix}/{args.output_chunks_name}")
 
     print("\n" + "="*60)
     print("[OK] Preprocessing pipeline complete!")
