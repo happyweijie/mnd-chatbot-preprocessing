@@ -38,6 +38,51 @@
 
 **Output:** `rag_chunks.parquet` (updated with `embedding` column)
 
+## How Chunking Works
+
+### Sentence-Aware (preprocess.py + tiktoken)
+
+- **Target size:** 700 tokens (precise)
+- **Max size:** 900 tokens (enforced)
+- **Overlap:** 100 tokens between chunks
+- **Strategy:** Splits on sentence boundaries, groups sentences to reach target size
+- **Benefit:** No mid-word cuts, respects discourse structure
+
+Example: "The government announced policy. This will affect housing." → one chunk (if <700 tokens)
+
+### Character-Based (simple_preprocess.py)
+
+- **Target size:** ~3,500 characters (≈ 700 tokens)
+- **Overlap:** 500 characters between chunks
+- **Strategy:** Splits at character positions, strips whitespace
+- **Trade-off:** May cut mid-word, but works offline
+
+Example: "The quick brown fox jumps over..." → splits at char 3500 (might hit mid-word)
+
+### Retrieval Text Format
+
+Each chunk's `retrieval_text` (used for embeddings) includes only semantically meaningful fields:
+
+```
+Title: New Housing Policy Announced
+Topics: Urban Development, Public Housing
+
+Article excerpt:
+The government announced plans to build 5,000 new HDB units...
+```
+
+**Included in retrieval_text:**
+- Title
+- Topics (comma-separated)
+- Content chunk
+
+**Excluded from retrieval_text** (not semantically meaningful for retrieval):
+- Sentiment scores and explanations (model-derived, not source evidence)
+- IDs and URLs (not helpful for semantic search)
+- Technical metadata
+
+---
+
 ## Setup
 
 ```bash
@@ -177,63 +222,42 @@ python simple_preprocess.py data.xlsx output/ \
 
 ---
 
-## How Chunking Works
+## CLI Arguments Reference
 
-### Sentence-Aware (preprocess.py + tiktoken)
+Both `preprocess.py` and `simple_preprocess.py` support these arguments:
 
-- **Target size:** 700 tokens (precise)
-- **Max size:** 900 tokens (enforced)
-- **Overlap:** 100 tokens between chunks
-- **Strategy:** Splits on sentence boundaries, groups sentences to reach target size
-- **Benefit:** No mid-word cuts, respects discourse structure
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `input_file` | *(required)* | Input CSV/Excel/Parquet file |
+| `output_dir` | *(required)* | Output directory for all parquet files |
+| `--batch-size` | `64` (preprocess), `4` (simple_preprocess) | Batch size for embeddings |
+| `--skip-embeddings` | *(flag)* | Skip Phase 4 (embeddings generation) |
+| `--s3-bucket` | *(optional)* | S3 bucket for upload (requires --s3-prefix) |
+| `--s3-prefix` | *(optional)* | S3 prefix/path for upload (requires --s3-bucket) |
+| `--output-base-name` | `articles_base.parquet` | Custom filename for Phase 1 output |
+| `--output-flat-name` | `articles_flat.parquet` | Custom filename for Phase 2 output |
+| `--output-chunks-name` | `rag_chunks.parquet` | Custom filename for Phase 3-4 output |
 
-Example: "The government announced policy. This will affect housing." → one chunk (if <700 tokens)
-
-### Character-Based (simple_preprocess.py)
-
-- **Target size:** ~3,500 characters (≈ 700 tokens)
-- **Overlap:** 500 characters between chunks
-- **Strategy:** Splits at character positions, strips whitespace
-- **Trade-off:** May cut mid-word, but works offline
-
-Example: "The quick brown fox jumps over..." → splits at char 3500 (might hit mid-word)
-
-### Retrieval Text Format
-
-Each chunk's `retrieval_text` (used for embeddings) includes only semantically meaningful fields:
-
-```
-Title: New Housing Policy Announced
-Topics: Urban Development, Public Housing
-
-Article excerpt:
-The government announced plans to build 5,000 new HDB units...
+**Custom Output Filenames Example:**
+```bash
+python preprocess.py data.xlsx output/ \
+  --output-base-name base_articles.parquet \
+  --output-flat-name flat_topics.parquet \
+  --output-chunks-name semantic_chunks.parquet \
+  --s3-bucket my-bucket \
+  --s3-prefix processed
 ```
 
-**Included in retrieval_text:**
-- Title
-- Topics (comma-separated)
-- Content chunk
-
-**Excluded from retrieval_text** (not semantically meaningful for retrieval):
-- Sentiment scores and explanations (model-derived, not source evidence)
-- IDs and URLs (not helpful for semantic search)
-- Technical metadata
+All output filenames must end with `.parquet`. Both local saves and S3 uploads use the custom names.
 
 ---
 
 ## API Configuration
 
-### For Government AI Gateway (api.ai.tech.gov.sg)
+### For Platform AI/Maestro (api.ai.tech.gov.sg)
 ```bash
 export OPENAI_API_KEY='sk-...'
 export OPENAI_BASE_URL='https://api.ai.tech.gov.sg/platform/models'
-```
-
-### For Standard OpenAI API
-```bash
-export OPENAI_API_KEY='sk-...'
-# Do NOT set OPENAI_BASE_URL (uses default api.openai.com)
 ```
 
 ---
@@ -255,6 +279,16 @@ python preprocess.py articles_2020_2025.xlsx ./output \
   --skip-embeddings
 ```
 
+**Custom output filenames:**
+```bash
+python preprocess.py articles_2020_2025.xlsx ./output \
+  --output-base-name base_2025.parquet \
+  --output-flat-name topics_2025.parquet \
+  --output-chunks-name chunks_2025.parquet \
+  --s3-bucket my-bucket \
+  --s3-prefix processed/2025
+```
+
 ### simple_preprocess.py (Offline)
 
 **Full 4-phase pipeline with embeddings:**
@@ -269,6 +303,16 @@ python simple_preprocess.py articles_2020_2025.xlsx ./output \
 ```bash
 python simple_preprocess.py articles_2020_2025.xlsx ./output \
   --skip-embeddings
+```
+
+**Custom output filenames with restricted network (no embeddings):**
+```bash
+python simple_preprocess.py articles_2020_2025.xlsx ./output \
+  --output-flat-name my_topics.parquet \
+  --output-chunks-name my_chunks.parquet \
+  --skip-embeddings \
+  --s3-bucket my-bucket \
+  --s3-prefix offline_processing
 ```
 
 ---
