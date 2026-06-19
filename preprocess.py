@@ -6,14 +6,15 @@ Uses Pydantic AI's Embedder for consistency with chatbot.
 import argparse
 import asyncio
 import os
-import sys
 from pathlib import Path
 
 import boto3
-import pandas as pd
 import numpy as np
-from pydantic_ai.models.openai import OpenAIEmbeddingModel, OpenAIProvider
-from pydantic_ai.embedders import Embedder, EmbeddingSettings
+from pydantic_ai.embeddings.openai import OpenAIEmbeddingModel
+from pydantic_ai.providers.openai import OpenAIProvider
+
+from pydantic_ai import Embedder
+from pydantic_ai.embeddings import EmbeddingSettings
 
 from src.preprocessing.storage import load_dataframe
 from src.preprocessing.data_cleaning import clean_base_articles, flatten_base_articles
