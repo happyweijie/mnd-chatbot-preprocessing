@@ -1,1 +1,5 @@
 __pycache__/
+
+# data files (raw exports and pipeline/notebook outputs)
+*.csv
+*.parquet
