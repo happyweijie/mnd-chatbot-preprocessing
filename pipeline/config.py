@@ -1,7 +1,15 @@
 """Single source of truth for pipeline constants.
 
 Edit here (or use the CLI overrides) to experiment with different settings.
+The embedding model/dimension are read from the environment (EMBEDDING_MODEL,
+EMBEDDING_DIM); a local .env file is loaded if present.
 """
+
+import os
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- chunking ------------------------------------------------------------
 # medium chunks: the median article is only ~980 tokens, so the earlier
@@ -14,8 +22,11 @@ MAX_CHUNK_TOKENS = 500
 OVERLAP_TOKENS = 75
 
 # --- embedding -----------------------------------------------------------
-EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIM = 1536
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+# optional override: leave EMBEDDING_DIM unset to use the model's default
+# length (1536 for text-embedding-3-small, 3072 for text-embedding-3-large)
+_dim = os.environ.get("EMBEDDING_DIM", "").strip()
+EMBEDDING_DIM: int | None = int(_dim) if _dim else None
 
 # Platform AI endpoint limits: 20 requests/min, 200,000 tokens/min.
 # retrieval_text averages ~390 tokens, so batch 20 at the request cap uses
@@ -26,7 +37,7 @@ EMBED_BATCH_SIZE = 20
 EMBED_MAX_RETRIES = 5
 EMBED_CHECKPOINT_EVERY = 25  # batches between checkpoint writes
 
-# --- output filenames (habit/ expects these names in its tmp/) -----------
+# --- output filenames (hint/ expects these names in its tmp/) -----------
 BASE_FILENAME = "articles_base.parquet"
 FLAT_FILENAME = "articles_flat.parquet"
 CHUNKS_FILENAME = "rag_chunks.parquet"

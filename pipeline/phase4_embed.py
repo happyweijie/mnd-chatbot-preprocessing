@@ -28,7 +28,7 @@ from . import config
 
 def create_embedder(
     model: str = config.EMBEDDING_MODEL,
-    dimensions: int = config.EMBEDDING_DIM,
+    dimensions: int | None = config.EMBEDDING_DIM,
 ) -> Embedder:
     # base_url must include the scheme, otherwise the openai client only
     # fails at request time with UnsupportedProtocol / "Connection error"
@@ -40,9 +40,15 @@ def create_embedder(
         api_key=os.environ["OPENAI_API_KEY"],
         base_url=base_url,
     )
+
+    # only request explicit dimensions when configured;
+    # otherwisedimensions is set to None in config.py
+    # when EMBEDDING_DIM is unset, so the model's default length is used
+    settings = EmbeddingSettings(dimensions=dimensions) if dimensions else None
+    
     return Embedder(
         OpenAIEmbeddingModel(model, provider=provider),
-        settings=EmbeddingSettings(dimensions=dimensions),
+        settings=settings,
     )
 
 
@@ -161,11 +167,15 @@ def run(
 
     result = chunks.join(embeddings, on="chunk_id", how="left")
 
-    # every chunk must have an embedding of the configured dimension
+    # every chunk must have an embedding; lengths must match the configured
+    # dimension, or at least be uniform when using the model's default
     assert result.get_column("embedding").null_count() == 0, "missing embeddings"
-    assert (
-        result.get_column("embedding").list.len() == config.EMBEDDING_DIM
-    ).all(), f"embeddings must be {config.EMBEDDING_DIM}-dimensional"
+    lengths = result.get_column("embedding").list.len()
+    if config.EMBEDDING_DIM is not None:
+        assert (lengths == config.EMBEDDING_DIM).all(), \
+            f"embeddings must be {config.EMBEDDING_DIM}-dimensional"
+    else:
+        assert lengths.n_unique() == 1, "embeddings have inconsistent dimensions"
 
     result.write_parquet(output_path)
     checkpoint_path.unlink(missing_ok=True)

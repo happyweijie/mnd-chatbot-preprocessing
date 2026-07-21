@@ -1,7 +1,7 @@
 # Article Preprocessing Pipeline
 
 Polars-based pipeline that turns the raw housing-articles CSV into the parquet
-files the H.A.B.I.T chatbot consumes. Consists of four discrete phases, each a pure
+files the hint chatbot consumes. Consists of four discrete phases, each a pure
 parquet-in/parquet-out step.
 
 | Phase | Command | Input | Output |
@@ -11,9 +11,10 @@ parquet-in/parquet-out step.
 | 3 chunk | `chunk` | base parquet | `rag_chunks.parquet` (sentence-aware token chunks + retrieval_text) |
 | 4 embed | `embed` | chunks parquet | `rag_chunks.parquet` with an `embedding` column (list[f32]) |
 
-All tunable constants (chunk sizes, embedding model/dimensions, batch size,
-rate limits, filenames) live in **`pipeline/config.py`** — edit there, or use
-the CLI overrides, to experiment.
+All tunable constants (chunk sizes, batch size, rate limits, filenames) live
+in **`pipeline/config.py`** — edit there, or use the CLI overrides, to
+experiment. The embedding model and dimensions are configured via environment
+variables (`EMBEDDING_MODEL`, `EMBEDDING_DIM`) — see Setup below.
 
 ## Setup
 
@@ -27,7 +28,15 @@ Environment variables (phase 4 only):
 $env:OPENAI_API_KEY = 'sk-...'
 # optional, for the gov endpoint; scheme is added automatically if missing
 $env:OPENAI_BASE_URL = 'https://api.ai.tech.gov.sg/platform/models'
+# optional overrides (defaults: text-embedding-3-small, model's native dims)
+$env:EMBEDDING_MODEL = 'text-embedding-3-large'
+$env:EMBEDDING_DIM = '3072'
 ```
+
+Alternatively, put them in a `.env` file (see `.env.example`) — it is loaded
+automatically, and real environment variables take precedence. Leave
+`EMBEDDING_DIM` unset to use the model's default length (1536 for
+text-embedding-3-small, 3072 for text-embedding-3-large).
 
 Offline machines (phase 3 needs tiktoken): set `TIKTOKEN_CACHE_DIR` to an
 **absolute** path (`~` is not expanded) containing the cached cl100k_base
@@ -62,7 +71,8 @@ python -m pipeline embed out/ --limit 8
   75-token sentence overlap between chunks (a chunk can reach cap + overlap in
   rare oversized-sentence cases). Assumes single-line article content —
   guarded by assertions in phase 3.
-- **Embedding**: `text-embedding-3-small`, 1536 dims, via Pydantic AI.
+- **Embedding**: `text-embedding-3-small` by default (override via
+  `EMBEDDING_MODEL`/`EMBEDDING_DIM`), via Pydantic AI.
   Requests are paced to the gov endpoint's limits (20 req/min, 200k
   tokens/min), retried with backoff, and checkpointed — an interrupted run
   resumes from the last checkpoint instead of starting over.
