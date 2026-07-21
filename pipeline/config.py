@@ -37,7 +37,11 @@ EMBED_BATCH_SIZE = 20
 EMBED_MAX_RETRIES = 5
 EMBED_CHECKPOINT_EVERY = 25  # batches between checkpoint writes
 
-# --- output filenames (hint/ expects these names in its tmp/) -----------
+# --- output filenames ----------------------------------------------------
+# hint/ consumes articles_flat.parquet and the *embedded* chunks file in its
+# tmp/ (where the embedded file is expected under the name rag_chunks.parquet
+# - rename on copy, or update hint/)
 BASE_FILENAME = "articles_base.parquet"
 FLAT_FILENAME = "articles_flat.parquet"
 CHUNKS_FILENAME = "rag_chunks.parquet"
+EMBEDDED_FILENAME = "rag_chunks_embedded.parquet"

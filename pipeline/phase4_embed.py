@@ -1,8 +1,8 @@
 """Phase 4: embed chunk retrieval_text and attach the embedding column.
 
-Input:  rag_chunks.parquet (phase 3 output)
-Output: the same file with an embedding column added (list[f32]), or a
-        separate sample file when --limit is used
+Input:  rag_chunks.parquet (phase 3 output, never overwritten)
+Output: rag_chunks_embedded.parquet - the chunks with an embedding column
+        added (list[f32]), or a separate sample file when --limit is used
 
 Requires OPENAI_API_KEY; OPENAI_BASE_URL is optional (gov endpoint).
 

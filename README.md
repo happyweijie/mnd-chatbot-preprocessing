@@ -9,7 +9,7 @@ parquet-in/parquet-out step.
 | 1 clean | `clean` | raw CSV | `articles_base.parquet` (one row per article) |
 | 2 flatten | `flatten` | base parquet | `articles_flat.parquet` (one row per article-topic, for SQL) |
 | 3 chunk | `chunk` | base parquet | `rag_chunks.parquet` (sentence-aware token chunks + retrieval_text) |
-| 4 embed | `embed` | chunks parquet | `rag_chunks.parquet` with an `embedding` column (list[f32]) |
+| 4 embed | `embed` | chunks parquet | `rag_chunks_embedded.parquet` (chunks + `embedding` column, list[f32]) |
 
 All tunable constants (chunk sizes, batch size, rate limits, filenames) live
 in **`pipeline/config.py`** — edit there, or use the CLI overrides, to
@@ -57,7 +57,7 @@ python -m pipeline flatten out/
 python -m pipeline chunk out/ --target-tokens 350 --max-tokens 500 --overlap-tokens 75
 python -m pipeline embed out/ --batch-size 20
 
-# smoke-test embedding on 8 chunks (writes rag_chunks.sample.parquet)
+# smoke-test embedding on 8 chunks (writes rag_chunks_embedded.sample.parquet)
 python -m pipeline embed out/ --limit 8
 ```
 

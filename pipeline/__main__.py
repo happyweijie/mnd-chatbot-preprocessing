@@ -4,7 +4,7 @@ Phases:
   clean    raw CSV -> articles_base.parquet
   flatten  articles_base.parquet -> articles_flat.parquet
   chunk    articles_base.parquet -> rag_chunks.parquet
-  embed    rag_chunks.parquet -> rag_chunks.parquet (embedding column added)
+  embed    rag_chunks.parquet -> rag_chunks_embedded.parquet (embedding column added)
   all      run every phase in order
 """
 
@@ -82,9 +82,10 @@ def main() -> None:
 
     elif args.phase == "embed":
         chunks_path = args.data_dir / config.CHUNKS_FILENAME
-        # a --limit smoke test must not overwrite the full chunk file
-        output_path = (chunks_path.with_suffix(".sample.parquet")
-                       if args.limit is not None else chunks_path)
+        embedded_path = args.data_dir / config.EMBEDDED_FILENAME
+        # a --limit smoke test must not overwrite the full embedded file
+        output_path = (embedded_path.with_suffix(".sample.parquet")
+                       if args.limit is not None else embedded_path)
         phase4_embed.run(chunks_path, output_path,
                          batch_size=args.batch_size, limit=args.limit)
 
@@ -102,7 +103,9 @@ def main() -> None:
         if args.skip_embeddings:
             print("skipping phase 4 (embeddings)")
         else:
-            phase4_embed.run(chunks_path, chunks_path, batch_size=args.batch_size)
+            phase4_embed.run(chunks_path,
+                             args.output_dir / config.EMBEDDED_FILENAME,
+                             batch_size=args.batch_size)
 
 
 if __name__ == "__main__":
