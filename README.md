@@ -1,6 +1,6 @@
-# Article Preprocessing Pipeline
+# Hint Article Preprocessing Pipeline
 
-Polars-based pipeline that turns the raw housing-articles CSV into the parquet
+Polars-based pipeline that turns raw housing-articles CSV into the parquet
 files the hint chatbot consumes. Consists of four discrete phases, each a pure
 parquet-in/parquet-out step.
 
@@ -18,19 +18,18 @@ variables (`EMBEDDING_MODEL`, `EMBEDDING_DIM`) — see Setup below.
 
 ## Setup
 
-```powershell
+```bash
 python -m pip install -r requirements.txt
 ```
 
-Environment variables (phase 4 only):
+Setup Environment variables (phase 4 only):
 
 ```powershell
-$env:OPENAI_API_KEY = 'sk-...'
-# optional, for the gov endpoint; scheme is added automatically if missing
-$env:OPENAI_BASE_URL = 'https://api.ai.tech.gov.sg/platform/models'
+OPENAI_API_KEY = 'sk-...'
+OPENAI_BASE_URL = 'xxxx`
 # optional overrides (defaults: text-embedding-3-small, model's native dims)
-$env:EMBEDDING_MODEL = 'text-embedding-3-large'
-$env:EMBEDDING_DIM = '3072'
+EMBEDDING_MODEL = 'text-embedding-3-large'
+EMBEDDING_DIM = '3072'
 ```
 
 Alternatively, put them in a `.env` file (see `.env.example`) — it is loaded
@@ -41,6 +40,28 @@ text-embedding-3-small, 3072 for text-embedding-3-large).
 Offline machines (phase 3 needs tiktoken): set `TIKTOKEN_CACHE_DIR` to an
 **absolute** path (`~` is not expanded) containing the cached cl100k_base
 encoder file `9b5ad71b2ce5302211f9c61530b329a4922fc6a4`.
+
+### Quick Setup using cat
+```bash
+cat << EOF > .env
+OPENAI_API_KEY=sk-...
+OPENAI_BASE_URL=xxxx
+EMBEDDING_MODEL=text-embedding-3-large
+TIKTOKEN_CACHE_DIR=/home/sagemaker-user/.cache/tiktoken
+EOF
+```
+
+### Setting up cached tiktoken encoder
+Download `cl100k_base.tiktoken` and upload it to `/.cache/tiktoken`. The `.cache` folder is found in the home directory. You may need to create a folder called `tiktoken` if one does not exist.
+
+Rename `cl100k_base.tiktoken` to `9b5ad71b2ce5302211f9c61530b329a4922fc6a4`. Note that there is no file extension.
+```bash
+# enter the cache directory
+cd /home/sagemaker-user/.cache/tiktoken
+
+# rename tiktoken tokenizer
+mv cl100k_base.tiktoken 9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+```
 
 ## Usage
 
