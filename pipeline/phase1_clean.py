@@ -10,6 +10,7 @@ from pathlib import Path
 import polars as pl
 
 from .assertions import (
+    assert_all_articles_within_batch_range,
     assert_no_articles_with_duplicate_topics,
     assert_no_articles_with_empty_topics,
     assert_no_articles_with_missing_published_dates,
@@ -18,6 +19,7 @@ from .assertions import (
     assert_no_articles_with_missing_titles,
     assert_no_duplicate_article_ids,
 )
+from .batching import parse_batch_id
 
 COLS_TO_KEEP = [
     "title",
@@ -173,16 +175,34 @@ def clean_articles(lf: pl.LazyFrame, all_topics: list[str]) -> pl.LazyFrame:
     return base.select(OUTPUT_COLS)
 
 
-def run(input_path: Path, output_path: Path) -> None:
+def run(
+        input_path: Path, 
+        output_path: Path, 
+        *, 
+        batch_id: str | None = None
+    ) -> None:
     lf = pl.scan_csv(input_path)
 
     all_topics = discover_topics(lf)
     base = clean_articles(lf, all_topics)
 
-    # no rows may be lost or invented by the cleaning itself
+    # add batch_id column
+    if batch_id is not None:
+        batch = parse_batch_id(batch_id)
+        assert_all_articles_within_batch_range(
+            base, batch.start_date, batch.end_date, batch_id
+        )
+
+        base = base.with_columns(batch_id=pl.lit(batch_id))
+    
     raw_rows = lf.select(pl.len()).collect().item()
-    excluded_rows = lf.filter(EXCLUDE_MASK).select(pl.len()).collect().item()
+    excluded_rows = (
+        lf.filter(EXCLUDE_MASK)
+        .select(pl.len()).collect().item()
+    )
     base_rows = base.select(pl.len()).collect().item()
+
+    # no rows may be lost or invented by the cleaning itself
     assert raw_rows - excluded_rows == base_rows, (
         f"Row count mismatch: {raw_rows} raw - {excluded_rows} excluded "
         f"!= {base_rows} cleaned"

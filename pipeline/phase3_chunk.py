@@ -28,7 +28,12 @@ OUTPUT_COLS = [
     "news_site",
     "url",
     "topics",
+    "year",
 ]
+# lineage column added by phase 1 only when a batch id is given (S3 batch
+# runs); carried through so every processed row can be traced to its source
+# batch (see README "S3 storage layout")
+OPTIONAL_OUTPUT_COLS = ["batch_id"]
 
 
 def build_rag_chunks(
@@ -46,7 +51,9 @@ def build_rag_chunks(
     # keep topic names only - sentiment detail stays in the flat file
     lf = base.with_columns(
         topics=pl.col("topics").list.eval(pl.element().struct.field("topic"))
-    ).drop("year", "quarter_year")
+    ).drop("quarter_year")
+    present = set(lf.collect_schema().names())
+    output_cols = OUTPUT_COLS + [c for c in OPTIONAL_OUTPUT_COLS if c in present]
 
     lf = (
         lf.with_columns(
@@ -88,7 +95,7 @@ def build_rag_chunks(
         )
     )
 
-    return lf.select(OUTPUT_COLS)
+    return lf.select(output_cols)
 
 
 def run(

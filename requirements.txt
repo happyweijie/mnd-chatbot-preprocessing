@@ -2,3 +2,5 @@ polars>=1.0
 tiktoken>=0.5
 pydantic-ai-slim[openai]>=0.1.0
 python-dotenv>=1.0
+# only for `python -m pipeline batch` (S3 in/out); preinstalled on SageMaker Studio
+boto3>=1.28
