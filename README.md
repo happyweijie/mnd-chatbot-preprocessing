@@ -91,7 +91,7 @@ and `processed/embeddings/**/*.parquet`).
 
 ```
 {prefix}/                              # HINT_S3_PREFIX, e.g. teams/xyz/hint (never the bucket root)
-├── raw/                               # uploaded by hand: one CSV per batch
+├── raw/                               # one CSV per batch (python -m pipeline upload)
 │   ├── year=2020/2020-01_to_2020-12.csv
 │   ├── ...
 │   ├── year=2025/2025-01_to_2025-12.csv
@@ -120,12 +120,14 @@ Conventions:
 - **Processed files are named after their source batch**: each run writes
   `<stage>/year=YYYY/<batch>.parquet` only — append-only and idempotent;
   re-running a batch overwrites only its own files.
-- **Non-overlap (enforced)**: before processing, the pipeline lists
-  `raw/year=YYYY/` and parses each filename's month range; it refuses if the
-  new batch's range intersects any existing file's range. Exception: an exact
-  filename match is an idempotent re-run. No data is downloaded for this
-  check. Together with the row-range rule this makes overlap impossible:
-  filenames cannot overlap, and rows cannot escape their filename's range.
+- **Non-overlap (enforced)**: before uploading (`pipeline upload`) and again
+  before processing (`pipeline batch`), the pipeline lists `raw/year=YYYY/`
+  and parses each filename's month range; it refuses if the new batch's range
+  intersects any existing file's range. Exception: an exact filename match is
+  an idempotent re-run (`upload` additionally requires `--overwrite` for it).
+  No data is downloaded for this check. Together with the row-range rule this
+  makes overlap impossible: filenames cannot overlap, and rows cannot escape
+  their filename's range.
 - **Lineage**: every processed row carries `batch_id` (the filename stem)
   and `year`, so a batch can be traced or selectively reprocessed.
 - **Dedup** (`article_id = title | date | news_site`) is enforced within a
@@ -136,7 +138,8 @@ Conventions:
   - New months, old data unchanged: upload the new months as a new batch
     file (e.g. `2026-06.csv`). No deletions.
   - Same batch revised (same coverage): re-upload under the **same**
-    filename and reprocess — outputs are overwritten in place.
+    filename (`pipeline upload --overwrite`) and reprocess — outputs are
+    overwritten in place.
   - Superseding a batch with different coverage (e.g. `2026-01_to_2026-05`
     → `2026-01_to_2026-06`): delete the old batch **everywhere** first —
     1 raw CSV + its 4 identically named processed parquets — then upload
@@ -151,7 +154,7 @@ Conventions:
 S3 and writes each stage back in the layout above:
 
 ```
-s3://{bucket}/{prefix}/raw/year=2026/2026-06.csv                          <- you upload this
+s3://{bucket}/{prefix}/raw/year=2026/2026-06.csv                          <- pipeline upload
 s3://{bucket}/{prefix}/processed/base/year=2026/2026-06.parquet           <- phase 1
 s3://{bucket}/{prefix}/processed/flattened/year=2026/2026-06.parquet      <- phase 2
 s3://{bucket}/{prefix}/processed/chunks/year=2026/2026-06.parquet         <- phase 3
@@ -170,8 +173,9 @@ export HINT_BUCKET=<bucket-name>          # bare name, no s3://
 export HINT_S3_PREFIX=teams/xyz/hint      # bare prefix, no leading/trailing slash
 export HINT_WORK_DIR=/home/sagemaker-user/hint_work   # persistent scratch (EFS)
 
-# 2. upload the raw batch under raw/year=YYYY/<batch-id>.csv
-aws s3 cp 2026-06.csv s3://$HINT_BUCKET/$HINT_S3_PREFIX/raw/year=2026/2026-06.csv
+# 2. upload the raw batch - the key raw/year=2026/2026-06.csv is derived from the id
+python -m pipeline upload --batch-id 2026-06 --file ~/2026-06.csv --dry-run   # local checks only
+python -m pipeline upload --batch-id 2026-06 --file ~/2026-06.csv
 
 # 3. check the resolved keys - makes no AWS calls
 python -m pipeline batch --batch-id 2026-06 --dry-run
@@ -180,6 +184,26 @@ python -m pipeline batch --batch-id 2026-06 --dry-run
 python -m pipeline batch --batch-id 2026-06 --skip-embeddings
 python -m pipeline batch --batch-id 2026-06
 ```
+
+How the uploader behaves (`pipeline upload`; use it instead of the S3
+console, which is unreliable on the work platform, or `aws s3 cp`, which
+lets you type the wrong key):
+
+- Validates the batch id and that `--file` is an existing `.csv`.
+- **Local validation** (default; `--skip-validation` to bypass): runs phase 1
+  on the CSV into a temp dir so every phase-1 guard fires *before* upload —
+  rows inside the filename's month range, parseable dates, unique article
+  ids, non-empty topics. The phase-1 output is discarded; only the original
+  CSV is uploaded. Without this, a bad file would sit in `raw/` until
+  `batch` rejects it and a human deletes it.
+- `--dry-run` stops after the local checks and prints the target key without
+  any AWS call.
+- Runs the **non-overlap** check against `raw/year=YYYY/` filenames; refuses
+  overlapping or malformed neighbours with nothing uploaded.
+- **Never silently overwrites**: if `raw/year=YYYY/<batch>.csv` already
+  exists it refuses unless `--overwrite` is passed, and then warns which
+  `processed/<stage>/` parquets from the previous run are now stale until
+  the batch is reprocessed. It never deletes anything.
 
 How the runner behaves:
 
@@ -269,7 +293,8 @@ pipeline/
 ├── phase3_chunk.py    # base -> rag_chunks.parquet
 ├── phase4_embed.py    # chunks -> chunks + embedding column
 ├── batching.py        # batch-id parsing + non-overlap rule (see "S3 storage layout")
+├── s3_upload.py       # local raw CSV -> raw/year=YYYY/<batch>.csv (python -m pipeline upload)
 └── s3_batch.py        # S3 in -> all phases -> S3 out (python -m pipeline batch)
-tests/                 # pytest suite (chunking, batching, S3 batch runner with fake S3)
+tests/                 # pytest suite (chunking, batching, S3 uploader + batch runner with fake S3)
 notebooks/             # exploratory notebooks the pipeline was derived from
 ```

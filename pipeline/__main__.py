@@ -6,13 +6,22 @@ Phases:
   chunk    articles_base.parquet -> rag_chunks.parquet
   embed    rag_chunks.parquet -> rag_chunks_embedded.parquet (embedding column added)
   all      run every phase in order
+  upload   S3: local <batch>.csv -> raw/year=YYYY/<batch>.csv (validated, non-overlap checked)
   batch    S3: raw/year=YYYY/<batch>.csv -> processed/<stage>/year=YYYY/<batch>.parquet
 """
 
 import argparse
 from pathlib import Path
 
-from . import config, phase1_clean, phase2_flatten, phase3_chunk, phase4_embed, s3_batch
+from . import (
+    config,
+    phase1_clean,
+    phase2_flatten,
+    phase3_chunk,
+    phase4_embed,
+    s3_batch,
+    s3_upload,
+)
 
 
 def add_chunk_options(parser: argparse.ArgumentParser) -> None:
@@ -27,6 +36,18 @@ def add_chunk_options(parser: argparse.ArgumentParser) -> None:
 def add_embed_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--batch-size", type=int, default=config.EMBED_BATCH_SIZE,
                         help=f"texts per embedding request (default {config.EMBED_BATCH_SIZE})")
+
+
+def add_s3_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--batch-id", required=True,
+                        help='e.g. "2026-06" or "2026-01_to_2026-05"')
+    parser.add_argument("--bucket", default=config.S3_BUCKET,
+                        help="S3 bucket name (default: $HINT_BUCKET)")
+    parser.add_argument("--prefix", default=config.S3_ROOT,
+                        help=f"root key prefix inside the bucket "
+                             f"(default: $HINT_S3_PREFIX or {config.S3_ROOT!r})")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="print the resolved S3 keys and exit without any AWS call")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -60,22 +81,27 @@ def build_parser() -> argparse.ArgumentParser:
     p_all.add_argument("--skip-embeddings", action="store_true",
                        help="stop after phase 3 (no API access needed)")
 
+    p_upload = sub.add_parser(
+        "upload",
+        help="upload one raw batch CSV to S3 (validated locally, non-overlap checked)",
+    )
+    add_s3_options(p_upload)
+    p_upload.add_argument("--file", type=Path, required=True, dest="csv_path",
+                          help="local raw batch CSV; uploaded as raw/year=YYYY/<batch-id>.csv")
+    p_upload.add_argument("--overwrite", action="store_true",
+                          help="allow replacing an existing file with the same batch id "
+                               "(then re-run `batch` so processed outputs are refreshed)")
+    p_upload.add_argument("--skip-validation", action="store_true",
+                          help="skip the local phase-1 dry run of the CSV before uploading")
+
     p_batch = sub.add_parser(
         "batch",
         help="run all phases on one S3 batch",
     )
-    p_batch.add_argument("--batch-id", required=True,
-                         help='e.g. "2026-06" or "2026-01_to_2026-05"')
-    p_batch.add_argument("--bucket", default=config.S3_BUCKET,
-                         help="S3 bucket name (default: $HINT_BUCKET)")
-    p_batch.add_argument("--prefix", default=config.S3_ROOT,
-                         help=f"root key prefix inside the bucket "
-                              f"(default: $HINT_S3_PREFIX or {config.S3_ROOT!r})")
+    add_s3_options(p_batch)
     p_batch.add_argument("--work-dir", type=Path, default=Path(config.S3_WORK_DIR),
                          help=f"local scratch dir for downloads/outputs/checkpoints "
                               f"(default: $HINT_WORK_DIR or {config.S3_WORK_DIR!r})")
-    p_batch.add_argument("--dry-run", action="store_true",
-                         help="print the resolved S3 keys and exit without any AWS call")
     p_batch.add_argument("--skip-embeddings", action="store_true",
                          help="stop after phase 3 (no API access needed)")
     add_chunk_options(p_batch)
@@ -128,6 +154,17 @@ def main() -> None:
             phase4_embed.run(chunks_path,
                              args.output_dir / config.EMBEDDED_FILENAME,
                              batch_size=args.batch_size)
+
+    elif args.phase == "upload":
+        s3_upload.run_upload(
+            args.batch_id,
+            args.csv_path,
+            bucket=args.bucket,
+            root=args.prefix,
+            overwrite=args.overwrite,
+            validate=not args.skip_validation,
+            dry_run=args.dry_run,
+        )
 
     elif args.phase == "batch":
         s3_batch.run_batch(
