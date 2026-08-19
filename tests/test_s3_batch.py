@@ -1,6 +1,6 @@
-"""Tests for pipeline.s3_batch and pipeline.s3_upload - key layout, settings
-validation, and the runner's / uploader's control flow against a fake S3
-client (no AWS, no boto3 needed).
+"""
+Tests for pipeline.s3_batch, pipeline.s3_upload and pipeline.s3_delete
+- key layout, settings validation, and control flow against a fake S3 client.
 Run with pytest, or directly: python tests/test_s3_batch.py
 """
 
@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from pipeline import s3_batch, s3_upload
+from pipeline import s3_batch, s3_delete, s3_upload
 from pipeline.batching import parse_batch_id
 from pipeline.s3_batch import S3Layout, validate_s3_settings
 
@@ -62,6 +62,7 @@ class FakeS3:
     def __init__(self, keys: dict[str, Path]):
         self.objects = dict(keys)  # key -> local file holding the content
         self.uploaded: list[str] = []
+        self.deleted: list[str] = []
 
     def get_paginator(self, name):
         assert name == "list_objects_v2"
@@ -82,6 +83,11 @@ class FakeS3:
         if Key not in self.objects:
             raise KeyError(Key)  # stands in for botocore ClientError (404)
         return {"ContentLength": self.objects[Key].stat().st_size}
+
+    def delete_object(self, Bucket, Key):
+        self.deleted.append(Key)
+        self.objects.pop(Key, None)  # like S3: deleting a missing key is not an error
+        return {}
 
 
 def write_raw_csv(path: Path) -> None:
@@ -306,6 +312,102 @@ def test_upload_existing_batch_needs_overwrite(uploaded_s3, local_csv, capsys):
 def test_object_exists(uploaded_s3):
     assert s3_upload.object_exists(uploaded_s3, "bkt", "hint/raw/year=2022/2022-08.csv")
     assert not s3_upload.object_exists(uploaded_s3, "bkt", "hint/raw/year=2022/nope.csv")
+
+
+# --- deleter control flow against a fake S3 ---------------------------------
+
+@pytest.fixture
+def processed_s3(fake_s3, monkeypatch, tmp_path):
+    """`fake_s3` (raw 2022-08 present) plus three of its four processed
+    outputs (embeddings never ran), an unrelated 2022-09 batch that must
+    survive, and a local scratch dir with a stale phase-4 checkpoint."""
+    monkeypatch.setattr(s3_delete, "_s3_client", lambda: fake_s3)
+    raw = fake_s3.objects["hint/raw/year=2022/2022-08.csv"]
+    layout = S3Layout("bkt", "hint", parse_batch_id("2022-08"))
+    for key in (layout.base_key, layout.flattened_key, layout.chunks_key):
+        fake_s3.objects[key] = raw
+    other = S3Layout("bkt", "hint", parse_batch_id("2022-09"))
+    fake_s3.objects[other.raw_key] = raw
+    fake_s3.objects[other.base_key] = raw
+
+    work_dir = tmp_path / "work"
+    local = work_dir / "2022-08"
+    local.mkdir(parents=True)
+    (local / "rag_chunks_embedded.checkpoint.parquet").write_bytes(b"stale")
+    return fake_s3, layout, work_dir
+
+
+def test_delete_dry_run_makes_no_aws_calls(monkeypatch, tmp_path, capsys):
+    def boom():
+        raise AssertionError("dry run must not create a client")
+    monkeypatch.setattr(s3_delete, "_s3_client", boom)
+
+    layout = s3_delete.run_delete("2022-08", bucket="bkt", root="hint",
+                                  work_dir=tmp_path, dry_run=True)
+    out = capsys.readouterr().out
+    for key in (layout.raw_key, layout.base_key, layout.flattened_key,
+                layout.chunks_key, layout.embeddings_key):
+        assert layout.uri(key) in out
+    assert str(tmp_path / "2022-08") in out
+    assert "dry run" in out
+
+
+def test_delete_unknown_batch_is_an_error(processed_s3):
+    fake, _, work_dir = processed_s3
+    with pytest.raises(AssertionError, match="nothing to delete"):
+        s3_delete.run_delete("2022-11", bucket="bkt", root="hint",
+                             work_dir=work_dir, yes=True)
+    assert fake.deleted == []
+
+
+def test_delete_without_yes_only_reports(processed_s3, capsys):
+    fake, layout, work_dir = processed_s3
+    before = dict(fake.objects)
+
+    s3_delete.run_delete("2022-08", bucket="bkt", root="hint", work_dir=work_dir)
+
+    out = capsys.readouterr().out
+    assert fake.deleted == []
+    assert fake.objects == before
+    assert (work_dir / "2022-08").is_dir()
+    assert f"found    {layout.uri(layout.raw_key)}" in out
+    assert f"missing  {layout.uri(layout.embeddings_key)}" in out
+    assert "would delete 4 S3 object(s) + local scratch dir" in out
+    assert "--yes" in out
+
+
+def test_delete_with_yes_removes_batch_everywhere_and_nothing_else(processed_s3, capsys):
+    fake, layout, work_dir = processed_s3
+    other = S3Layout("bkt", "hint", parse_batch_id("2022-09"))
+
+    s3_delete.run_delete("2022-08", bucket="bkt", root="hint",
+                         work_dir=work_dir, yes=True)
+
+    # only the four objects that existed were deleted; the never-written
+    # embeddings key is reported missing, not deleted
+    assert sorted(fake.deleted) == sorted([
+        layout.raw_key, layout.base_key, layout.flattened_key, layout.chunks_key,
+    ])
+    for key in (layout.raw_key, layout.base_key, layout.flattened_key,
+                layout.chunks_key, layout.embeddings_key):
+        assert key not in fake.objects
+    # the neighbouring batch is untouched
+    assert other.raw_key in fake.objects and other.base_key in fake.objects
+    # local scratch dir (with its stale checkpoint) is gone, work_dir itself stays
+    assert not (work_dir / "2022-08").exists()
+    assert work_dir.is_dir()
+    assert "deleted everywhere" in capsys.readouterr().out
+
+
+def test_delete_local_dir_only(processed_s3):
+    # batch exists only locally (e.g. S3 side already cleaned by hand):
+    # still worth deleting, and must not error on the S3 side
+    fake, _, work_dir = processed_s3
+    (work_dir / "2022-10").mkdir()
+    s3_delete.run_delete("2022-10", bucket="bkt", root="hint",
+                         work_dir=work_dir, yes=True)
+    assert fake.deleted == []
+    assert not (work_dir / "2022-10").exists()
 
 
 if __name__ == "__main__":
