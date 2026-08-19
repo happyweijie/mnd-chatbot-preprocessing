@@ -1,4 +1,6 @@
 # Hint Article Preprocessing Pipeline
+![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=white)
+![Polars](https://img.shields.io/badge/polars-%230075ff.svg?style=for-the-badge&logo=polars&logoColor=white)
 
 Polars-based ETL pipeline that turns raw housing-articles CSV into the parquet
 files the hint chatbot consumes. Consists of four discrete phases, each a pure
