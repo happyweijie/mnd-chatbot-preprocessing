@@ -134,7 +134,8 @@ Conventions:
   batch only; a cross-batch check can be added later without changing the
   layout.
 - **Replacement rule — nothing is ever deleted automatically**; humans
-  delete, the pipeline only rejects.
+  delete (explicitly, per batch id, via `python -m pipeline delete`), the
+  pipeline only rejects.
   - New months, old data unchanged: upload the new months as a new batch
     file (e.g. `2026-06.csv`). No deletions.
   - Same batch revised (same coverage): re-upload under the **same**
@@ -142,9 +143,11 @@ Conventions:
     overwritten in place.
   - Superseding a batch with different coverage (e.g. `2026-01_to_2026-05`
     → `2026-01_to_2026-06`): delete the old batch **everywhere** first —
-    1 raw CSV + its 4 identically named processed parquets — then upload
-    and process the replacement. Deleting only the raw file leaves stale
-    outputs in `processed/` and consumers would read those months twice.
+    `python -m pipeline delete --batch-id 2026-01_to_2026-05 --yes` removes
+    the raw CSV, its 4 identically named processed parquets and its local
+    scratch dir — then upload and process the replacement. Deleting only the
+    raw file (e.g. by hand in the console) leaves stale outputs in
+    `processed/` and consumers would read those months twice.
 - **Phase 4 checkpoints** (`*.checkpoint.parquet`) stay local; never under
   `processed/embeddings/`.
 
@@ -217,6 +220,29 @@ How the runner behaves:
   resumes from there if interrupted; keep that dir on persistent storage.
 - **Re-runs are idempotent**: the same batch id overwrites only its own
   four parquets.
+
+How the deleter behaves (`pipeline delete`; the only thing in the pipeline
+that removes data, and only when a human asks it to):
+
+```bash
+python -m pipeline delete --batch-id 2026-01_to_2026-05          # report only: what exists, what would go
+python -m pipeline delete --batch-id 2026-01_to_2026-05 --yes    # delete
+```
+
+- Targets exactly the batch's own objects — the raw CSV plus the four
+  `processed/<stage>/year=YYYY/<batch>.parquet` files — and its local
+  scratch dir `HINT_WORK_DIR/<batch>/` (which may hold a phase-4 checkpoint
+  that a later reprocess of a revised batch would otherwise resume from).
+  Keys are derived from the batch id; nothing is ever listed or deleted by
+  prefix, so other batches cannot be touched.
+- `--dry-run` prints the targets with no AWS call. Without `--yes` it makes
+  `head_object` calls to report which targets exist and which are missing,
+  then exits **without deleting** — that is the confirmation step (no
+  interactive prompt, so it works from scripts and Studio terminals).
+- A batch that exists nowhere (no objects, no local dir) is an **error**, so
+  a mistyped id cannot look like a successful delete.
+- Missing objects (e.g. embeddings never ran) are reported and skipped, not
+  errors. With `--yes` every existing target is removed and listed.
 
 ## Handover: SageMaker Processing job (not built)
 
@@ -294,7 +320,8 @@ pipeline/
 ├── phase4_embed.py    # chunks -> chunks + embedding column
 ├── batching.py        # batch-id parsing + non-overlap rule (see "S3 storage layout")
 ├── s3_upload.py       # local raw CSV -> raw/year=YYYY/<batch>.csv (python -m pipeline upload)
-└── s3_batch.py        # S3 in -> all phases -> S3 out (python -m pipeline batch)
-tests/                 # pytest suite (chunking, batching, S3 uploader + batch runner with fake S3)
+├── s3_batch.py        # S3 in -> all phases -> S3 out (python -m pipeline batch)
+└── s3_delete.py       # remove one batch everywhere (python -m pipeline delete)
+tests/                 # pytest suite (chunking, batching, S3 uploader/runner/deleter with fake S3)
 notebooks/             # exploratory notebooks the pipeline was derived from
 ```

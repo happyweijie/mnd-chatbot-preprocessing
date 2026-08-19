@@ -8,6 +8,7 @@ Phases:
   all      run every phase in order
   upload   S3: local <batch>.csv -> raw/year=YYYY/<batch>.csv (validated, non-overlap checked)
   batch    S3: raw/year=YYYY/<batch>.csv -> processed/<stage>/year=YYYY/<batch>.parquet
+  delete   S3: remove one batch everywhere (raw csv + 4 parquet outputs + local scratch dir)
 """
 
 import argparse
@@ -20,6 +21,7 @@ from . import (
     phase3_chunk,
     phase4_embed,
     s3_batch,
+    s3_delete,
     s3_upload,
 )
 
@@ -48,6 +50,12 @@ def add_s3_options(parser: argparse.ArgumentParser) -> None:
                              f"(default: $HINT_S3_PREFIX or {config.S3_ROOT!r})")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the resolved S3 keys and exit without any AWS call")
+
+
+def add_work_dir_option(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--work-dir", type=Path, default=Path(config.S3_WORK_DIR),
+                        help=f"local scratch dir for downloads/outputs/checkpoints "
+                             f"(default: $HINT_WORK_DIR or {config.S3_WORK_DIR!r})")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -99,13 +107,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="run all phases on one S3 batch",
     )
     add_s3_options(p_batch)
-    p_batch.add_argument("--work-dir", type=Path, default=Path(config.S3_WORK_DIR),
-                         help=f"local scratch dir for downloads/outputs/checkpoints "
-                              f"(default: $HINT_WORK_DIR or {config.S3_WORK_DIR!r})")
+    add_work_dir_option(p_batch)
     p_batch.add_argument("--skip-embeddings", action="store_true",
                          help="stop after phase 3 (no API access needed)")
     add_chunk_options(p_batch)
     add_embed_options(p_batch)
+
+    p_delete = sub.add_parser(
+        "delete",
+        help="delete one batch everywhere: raw CSV, 4 processed parquets, local scratch dir",
+    )
+    add_s3_options(p_delete)
+    add_work_dir_option(p_delete)
+    p_delete.add_argument("--yes", action="store_true",
+                          help="actually delete; without it the command only reports what "
+                               "exists and what would be removed")
 
     return parser
 
@@ -178,6 +194,16 @@ def main() -> None:
             max_chunk_tokens=args.max_tokens,
             overlap_tokens=args.overlap_tokens,
             embed_batch_size=args.batch_size,
+        )
+
+    elif args.phase == "delete":
+        s3_delete.run_delete(
+            args.batch_id,
+            bucket=args.bucket,
+            root=args.prefix,
+            work_dir=args.work_dir,
+            yes=args.yes,
+            dry_run=args.dry_run,
         )
 
 
