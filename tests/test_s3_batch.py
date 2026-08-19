@@ -1,5 +1,6 @@
-"""Tests for pipeline.s3_batch - key layout, settings validation, and the
-runner's control flow against a fake S3 client (no AWS, no boto3 needed).
+"""Tests for pipeline.s3_batch and pipeline.s3_upload - key layout, settings
+validation, and the runner's / uploader's control flow against a fake S3
+client (no AWS, no boto3 needed).
 Run with pytest, or directly: python tests/test_s3_batch.py
 """
 
@@ -10,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from pipeline import s3_batch
+from pipeline import s3_batch, s3_upload
 from pipeline.batching import parse_batch_id
 from pipeline.s3_batch import S3Layout, validate_s3_settings
 
@@ -76,6 +77,11 @@ class FakeS3:
     def upload_file(self, filename, bucket, key):
         self.uploaded.append(key)
         self.objects[key] = Path(filename)
+
+    def head_object(self, Bucket, Key):
+        if Key not in self.objects:
+            raise KeyError(Key)  # stands in for botocore ClientError (404)
+        return {"ContentLength": self.objects[Key].stat().st_size}
 
 
 def write_raw_csv(path: Path) -> None:
@@ -179,6 +185,127 @@ def test_article_outside_batch_range_rejected(fake_s3, tmp_path):
         s3_batch.run_batch("2022-07", bucket="bkt", root="hint",
                            work_dir=tmp_path, skip_embeddings=True)
     assert fake_s3.uploaded == []
+
+
+# --- uploader control flow against a fake S3 --------------------------------
+
+@pytest.fixture
+def local_csv(tmp_path):
+    """A fresh copy of the synthetic Aug-2022 batch on local disk, as a user
+    would have it before uploading."""
+    path = tmp_path / "local" / "2022-08.csv"
+    path.parent.mkdir()
+    write_raw_csv(path)
+    return path
+
+
+@pytest.fixture
+def empty_s3(monkeypatch):
+    """Fake S3 with nothing under raw/ yet (unlike `fake_s3`, which already
+    holds 2022-08)."""
+    fake = FakeS3({})
+    monkeypatch.setattr(s3_batch, "_s3_client", lambda: fake)
+    monkeypatch.setattr(s3_upload, "_s3_client", lambda: fake)
+    return fake
+
+
+@pytest.fixture
+def uploaded_s3(fake_s3, monkeypatch):
+    """`fake_s3` (raw 2022-08 already present) wired into the uploader too."""
+    monkeypatch.setattr(s3_upload, "_s3_client", lambda: fake_s3)
+    return fake_s3
+
+
+def test_upload_dry_run_makes_no_aws_calls(monkeypatch, local_csv, capsys):
+    def boom():
+        raise AssertionError("dry run must not create a client")
+    monkeypatch.setattr(s3_upload, "_s3_client", boom)
+
+    layout = s3_upload.run_upload("2022-08", local_csv, bucket="bkt", root="hint",
+                                  dry_run=True)
+    out = capsys.readouterr().out
+    assert layout.raw_key == "hint/raw/year=2022/2022-08.csv"
+    assert layout.uri(layout.raw_key) in out
+    assert "dry run" in out
+
+
+def test_upload_rejects_bad_inputs_before_any_aws_call(monkeypatch, local_csv, tmp_path):
+    def boom():
+        raise AssertionError("must fail before creating a client")
+    monkeypatch.setattr(s3_upload, "_s3_client", boom)
+
+    with pytest.raises(ValueError, match="not of the form"):
+        s3_upload.run_upload("2022-8", local_csv, bucket="bkt", root="hint")
+    with pytest.raises(AssertionError, match="file not found"):
+        s3_upload.run_upload("2022-08", tmp_path / "missing.csv", bucket="bkt", root="hint")
+    not_csv = tmp_path / "2022-08.xlsx"
+    not_csv.write_bytes(b"")
+    with pytest.raises(AssertionError, match="must be CSV"):
+        s3_upload.run_upload("2022-08", not_csv, bucket="bkt", root="hint")
+
+
+def test_upload_local_validation_rejects_rows_outside_batch_range(monkeypatch, local_csv):
+    # the Aug-2022 file offered under a July id must fail in the local phase-1
+    # dry run, before a client is even created
+    def boom():
+        raise AssertionError("must fail in local validation, before any AWS call")
+    monkeypatch.setattr(s3_upload, "_s3_client", boom)
+
+    with pytest.raises(AssertionError, match="outside batch"):
+        s3_upload.run_upload("2022-07", local_csv, bucket="bkt", root="hint")
+
+
+def test_upload_skip_validation_lets_mismatched_file_through(empty_s3, local_csv):
+    # documents what --skip-validation gives up: the file lands in S3 and only
+    # `batch` will reject it later
+    layout = s3_upload.run_upload("2022-07", local_csv, bucket="bkt", root="hint",
+                                  validate=False)
+    assert empty_s3.uploaded == [layout.raw_key]
+
+
+def test_upload_happy_path(empty_s3, local_csv, capsys):
+    layout = s3_upload.run_upload("2022-08", local_csv, bucket="bkt", root="hint")
+
+    assert empty_s3.uploaded == ["hint/raw/year=2022/2022-08.csv"]
+    assert empty_s3.objects[layout.raw_key].read_bytes() == local_csv.read_bytes()
+    assert "pipeline batch --batch-id 2022-08" in capsys.readouterr().out
+
+
+def test_upload_overlapping_batch_rejected(uploaded_s3, tmp_path):
+    # raw 2022-08 exists; a July-September file overlaps it. we can't use the
+    # Aug-only synthetic rows under a Jul-Sep id without failing validation
+    # first, so skip validation to reach the S3-side check
+    csv = tmp_path / "2022-07_to_2022-09.csv"
+    write_raw_csv(csv)
+    with pytest.raises(AssertionError, match="overlaps existing batch"):
+        s3_upload.run_upload("2022-07_to_2022-09", csv, bucket="bkt", root="hint",
+                             validate=False)
+    assert uploaded_s3.uploaded == []
+
+
+def test_upload_existing_batch_needs_overwrite(uploaded_s3, local_csv, capsys):
+    with pytest.raises(AssertionError, match="already exists"):
+        s3_upload.run_upload("2022-08", local_csv, bucket="bkt", root="hint")
+    assert uploaded_s3.uploaded == []
+
+    # simulate a previous processing run so the stale-output warning fires
+    layout = S3Layout("bkt", "hint", parse_batch_id("2022-08"))
+    uploaded_s3.objects[layout.base_key] = local_csv
+    uploaded_s3.objects[layout.flattened_key] = local_csv
+
+    s3_upload.run_upload("2022-08", local_csv, bucket="bkt", root="hint",
+                         overwrite=True)
+    assert uploaded_s3.uploaded == [layout.raw_key]
+    out = capsys.readouterr().out
+    assert "stale" in out
+    assert layout.uri(layout.base_key) in out
+    assert layout.uri(layout.flattened_key) in out
+    assert layout.uri(layout.chunks_key) not in out  # never processed -> not listed
+
+
+def test_object_exists(uploaded_s3):
+    assert s3_upload.object_exists(uploaded_s3, "bkt", "hint/raw/year=2022/2022-08.csv")
+    assert not s3_upload.object_exists(uploaded_s3, "bkt", "hint/raw/year=2022/nope.csv")
 
 
 if __name__ == "__main__":
