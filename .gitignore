@@ -3,3 +3,6 @@ __pycache__/
 # data files (raw exports and pipeline/notebook outputs)
 *.csv
 *.parquet
+
+# local scratch for `python -m pipeline batch` (downloads, outputs, checkpoints)
+s3_work/

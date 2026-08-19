@@ -37,6 +37,17 @@ EMBED_BATCH_SIZE = 20
 EMBED_MAX_RETRIES = 5
 EMBED_CHECKPOINT_EVERY = 25  # batches between checkpoint writes
 
+# --- S3 batch layout (see README "S3 storage layout") ---------------------
+# bucket + root prefix that `python -m pipeline batch` reads raw batches from
+# and writes processed stages to.
+# S3_ROOT is a bare key prefix (may contain slashes, e.g. "teams/xyz/hint"),
+# never with a leading/trailing slash or s3:// scheme.
+S3_BUCKET = os.environ.get("HINT_BUCKET", "")
+S3_ROOT = os.environ.get("HINT_S3_PREFIX", "hint")
+# local scratch for downloaded raw CSVs, stage outputs and phase-4 checkpoints;
+# deliberately stable (not a tempdir) so an interrupted embed run resumes
+S3_WORK_DIR = os.environ.get("HINT_WORK_DIR", "s3_work")
+
 # --- output filenames ----------------------------------------------------
 # hint/ consumes articles_flat.parquet and the *embedded* chunks file in its
 # tmp/ (where the embedded file is expected under the name rag_chunks.parquet

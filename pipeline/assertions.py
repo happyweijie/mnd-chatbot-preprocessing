@@ -117,6 +117,28 @@ def assert_no_articles_with_missing_sentiment_reasons(
     )
 
 
+def assert_all_articles_within_batch_range(
+    lf: pl.LazyFrame,
+    start_date,
+    end_date,
+    batch_id: str,
+) -> None:
+    # unlike the count-only assertions above, this lists the offending rows:
+    # the fix is to split the delivery or rename the batch file, so the
+    # operator needs to see which articles fall outside the claimed range
+    offending = (
+        lf.filter(~pl.col("published_date").is_between(start_date, end_date))
+        .select("title", "published_date", "news_site")
+        .collect()
+    )
+
+    assert offending.height == 0, (
+        f"Found {offending.height} articles published outside batch "
+        f"{batch_id!r} range [{start_date} .. {end_date}] - split the "
+        f"delivery or fix the batch filename. Offending rows:\n{offending}"
+    )
+
+
 def assert_data_correctly_flattened(
     base: pl.LazyFrame,
     flattened: pl.LazyFrame,

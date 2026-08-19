@@ -6,12 +6,13 @@ Phases:
   chunk    articles_base.parquet -> rag_chunks.parquet
   embed    rag_chunks.parquet -> rag_chunks_embedded.parquet (embedding column added)
   all      run every phase in order
+  batch    S3: raw/year=YYYY/<batch>.csv -> processed/<stage>/year=YYYY/<batch>.parquet
 """
 
 import argparse
 from pathlib import Path
 
-from . import config, phase1_clean, phase2_flatten, phase3_chunk, phase4_embed
+from . import config, phase1_clean, phase2_flatten, phase3_chunk, phase4_embed, s3_batch
 
 
 def add_chunk_options(parser: argparse.ArgumentParser) -> None:
@@ -58,6 +59,27 @@ def build_parser() -> argparse.ArgumentParser:
     add_embed_options(p_all)
     p_all.add_argument("--skip-embeddings", action="store_true",
                        help="stop after phase 3 (no API access needed)")
+
+    p_batch = sub.add_parser(
+        "batch",
+        help="run all phases on one S3 batch",
+    )
+    p_batch.add_argument("--batch-id", required=True,
+                         help='e.g. "2026-06" or "2026-01_to_2026-05"')
+    p_batch.add_argument("--bucket", default=config.S3_BUCKET,
+                         help="S3 bucket name (default: $HINT_BUCKET)")
+    p_batch.add_argument("--prefix", default=config.S3_ROOT,
+                         help=f"root key prefix inside the bucket "
+                              f"(default: $HINT_S3_PREFIX or {config.S3_ROOT!r})")
+    p_batch.add_argument("--work-dir", type=Path, default=Path(config.S3_WORK_DIR),
+                         help=f"local scratch dir for downloads/outputs/checkpoints "
+                              f"(default: $HINT_WORK_DIR or {config.S3_WORK_DIR!r})")
+    p_batch.add_argument("--dry-run", action="store_true",
+                         help="print the resolved S3 keys and exit without any AWS call")
+    p_batch.add_argument("--skip-embeddings", action="store_true",
+                         help="stop after phase 3 (no API access needed)")
+    add_chunk_options(p_batch)
+    add_embed_options(p_batch)
 
     return parser
 
@@ -106,6 +128,20 @@ def main() -> None:
             phase4_embed.run(chunks_path,
                              args.output_dir / config.EMBEDDED_FILENAME,
                              batch_size=args.batch_size)
+
+    elif args.phase == "batch":
+        s3_batch.run_batch(
+            args.batch_id,
+            bucket=args.bucket,
+            root=args.prefix,
+            work_dir=args.work_dir,
+            skip_embeddings=args.skip_embeddings,
+            dry_run=args.dry_run,
+            target_chunk_tokens=args.target_tokens,
+            max_chunk_tokens=args.max_tokens,
+            overlap_tokens=args.overlap_tokens,
+            embed_batch_size=args.batch_size,
+        )
 
 
 if __name__ == "__main__":
