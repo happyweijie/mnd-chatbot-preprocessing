@@ -71,23 +71,55 @@ HINT_S3_PREFIX=my_bucket_name
 EOF
 ```
 
-### Setting up cached tiktoken encoder
+### Setting up a cached `tiktoken` encoder in Restricted Environments
 
-Download `cl100k_base.tiktoken` and upload it to `/.cache/tiktoken`. The `.cache` folder is found in the home directory of Sagemaker. You may need to create a folder called `tiktoken` if one does not exist. 
+[tiktoken](https://github.com/openai/tiktoken) is OpenAI's fast Byte Pair Encoding (BPE) tokenizer. It is used in this preprocessing pipeline to perform precise token counting before text is sent to downstream embedding models.
 
-Afterwards, rename `cl100k_base.tiktoken` to `9b5ad71b2ce5302211f9c61530b329a4922fc6a4`. 
+In particular, this pipeline uses the `cl100k_base` encoding, which is used by OpenAI's `text-embedding-3` embedding models.
 
-```bash
-# enter the cache directory
-cd /home/sagemaker-user/.cache/tiktoken
+By default, `tiktoken` may attempt to download the encoding data the first time an encoder is loaded. In restricted or air-gapped environments, such as a SageMaker environment without outbound internet access, this download will fail. The encoder therefore needs to be downloaded beforehand and placed in the local tiktoken cache.
 
-# rename tiktoken tokenizer
-mv cl100k_base.tiktoken 9b5ad71b2ce5302211f9c61530b329a4922fc6a4
-```
+#### Steps
 
-Visit the `/.cache/tiktoken` folder. you should see this:
+1. Download the `cl100k_base.tiktoken` encoder file from an environment with internet access.
 
-![tiktoken cache](assets/tiktoken_cache.png)
+2. Upload the encoder file to the `tiktoken` cache directory in your SageMaker environment:
+
+   ```text
+   /home/sagemaker-user/.cache/tiktoken/
+   ```
+
+   If the `tiktoken` directory does not already exist, create it first:
+
+   ```bash
+   mkdir -p /home/sagemaker-user/.cache/tiktoken
+   ```
+
+3. Place the downloaded `cl100k_base.tiktoken` file in the `tiktoken` directory.
+
+4. Rename the encoder file to the cache key expected by `tiktoken`:
+
+   ```bash
+   # Enter the tiktoken cache directory
+   cd /home/sagemaker-user/.cache/tiktoken
+
+   # Rename the cl100k_base encoder to its expected cache key
+   mv cl100k_base.tiktoken 9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+   ```
+
+   After renaming, the directory should look like:
+
+   ```text
+   /home/sagemaker-user/.cache/
+   └── tiktoken/
+       └── 9b5ad71b2ce5302211f9c61530b329a4922fc6a4
+   ```
+
+    You can also verify the contents of the `/.cache/tiktoken` directory using the Sagemaker file explorer. you should see this:
+    
+    ![tiktoken cache](assets/tiktoken_cache.png)
+
+Once the encoder is available in the local cache, `tiktoken` can load `cl100k_base` without requiring outbound network access. This allows the preprocessing pipeline to perform token counting normally in restricted SageMaker environments.
 
 ### Uploading files to S3
 
