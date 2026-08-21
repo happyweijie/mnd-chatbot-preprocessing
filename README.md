@@ -2,9 +2,7 @@
 ![Python](https://img.shields.io/badge/python-%233670A0.svg?style=for-the-badge&logo=python&logoColor=white)
 ![Polars](https://img.shields.io/badge/polars-%230075ff.svg?style=for-the-badge&logo=polars&logoColor=white)
 
-Polars-based ETL pipeline that turns raw housing-articles CSV into the parquet
-files the hint chatbot consumes. Consists of four discrete phases, each a pure
-parquet-in/parquet-out step.
+Polars-based ETL pipeline running on [Maestro](https://www.tech.gov.sg/products-and-services/for-government-agencies/data-and-ai/maestro/) AWS Sagemaker that turns raw housing-articles CSV into the parquet files the hint chatbot consumes. Consists of four discrete phases, each a pure parquet-in/parquet-out step.
 
 | Phase | Command | Input | Output |
 |---|---|---|---|
@@ -112,6 +110,14 @@ python -m pipeline upload --batch-id 2026-06 --file <path_to_file>
 #### Uploading directly through Maestro S3 Explorer
 
 > **Known Issue:** There are instances where some csv files cannot be uploaded manually through Maestro. In these cases, fallback to uploading through the script.
+
+Log in to Maestro and select a domain.
+
+![maestro s3 domain](assets/maestro_s3_domain.png)
+
+In the domain dashboard, click `S3 File Explorer`, at the top right hand corner.
+
+![maestro s3 file explorer](assets/maestro_s3_file_explorer.png)
 
 Before uploading the raw csv file, rename the file and ensure it adheres to this naming convention: `2026-06` (one month) or `2026-01_to_2026-05` (inclusive month range). A dataset can span at most a single year.
 
