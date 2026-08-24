@@ -6,3 +6,5 @@ __pycache__/
 
 # local scratch for `python -m pipeline batch` (downloads, outputs, checkpoints)
 s3_work/
+
+.env
