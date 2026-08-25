@@ -3,7 +3,7 @@
 ![Polars](https://img.shields.io/badge/polars-%230075ff.svg?style=for-the-badge&logo=polars&logoColor=white)
 ![AWS Sagemaker](https://img.shields.io/badge/AWS%20Sagemaker-FF9900?style=for-the-badge&logo=amazonwebservices&logoColor=white)
 
-Polars-based ETL pipeline running on [Maestro](https://www.tech.gov.sg/products-and-services/for-government-agencies/data-and-ai/maestro/) AWS Sagemaker that turns raw housing-articles CSV into the parquet files the hint chatbot consumes. Consists of four discrete phases, each a pure parquet-in/parquet-out step.
+Polars-based ETL pipeline running on [Maestro](https://www.tech.gov.sg/products-and-services/for-government-agencies/data-and-ai/maestro/) AWS Sagemaker that turns raw housing articles CSV datasets into curated parquet files for analytics and RAG. The pipeline consists of four discrete phases, each a pure parquet-in/parquet-out step.
 
 | Phase | Command | Input | Output |
 |---|---|---|---|
