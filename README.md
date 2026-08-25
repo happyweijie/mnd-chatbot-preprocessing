@@ -142,7 +142,7 @@ python -m pipeline upload --batch-id 2026-06 --file <path_to_file>
 
 #### Uploading directly through Maestro S3 Explorer
 
-> **Known Issue:** There are instances where some csv files cannot be uploaded manually through Maestro. In these cases, fallback to uploading through the script.
+> **Known Issue:** There are instances where manual uploads through Maestro S3 File Explorer fail. In these cases, fallback to uploading through the script.
 
 Log in to Maestro and select a domain.
 
@@ -154,21 +154,21 @@ In the domain dashboard, click `S3 File Explorer`, at the top right hand corner.
 
 Before uploading the raw csv file, rename the file and ensure it adheres to this naming convention: `2026-06` (one month) or `2026-01_to_2026-05` (inclusive month range). A dataset can span at most a single year.
 
-Visit the Maestro S3 Explorer and click on the folder (prefix) storing the datasets.
+In the Maestro S3 Explorer, click on the folder (prefix) storing the datasets (e.g. `hint`).
 
 ![maestro upload](assets/maestro_upload_1.png)
 
-Click on the raw folder and click on the folder corresponding to the year of the dataset. For example, if your dataset is for `July 2026`, click on the folder `year=2026`. If no such folder exists, create a new folder called `year=<year>` before entering the folder.
+Click on the raw folder and click on the folder corresponding to the year of the dataset. For example, if your dataset is for `2026-07`, click on the folder `year=2026`. If no such folder exists, first create a new folder called `year=<year>` with the `New Folder` button.
 
 ![maestro upload](assets/maestro_upload_2.png)
 
-Use the upload button to upload the raw csv file to the S3 folder. 
+Once inside the correct folder, use the `Upload Files` button to upload the raw csv file into the S3 bucket. 
 
 ![maestro upload](assets/maestro_upload_3.png)
 
 ## Running the Pipeline
 
-In sagemaker, activate the virtual environment if you haven't already and run:
+In AWS Sagemaker, activate the virtual environment if you haven't already and run:
 
 ```bash
 # run full pipeline on a raw csv file stored on the s3 data lake
@@ -183,7 +183,7 @@ python -m pipeline all articles.csv out/
 
 ## Deleting datasets with the pipeline
 
-The pipeline can also be used to clean up the S3 data lake, allowing you to remove old batches to replace them with new ones. When deleting a batch,
+The pipeline can also be used to clean up the S3 data lake, allowing you to remove old batches and replace them with new ones. When deleting a batch,
 both the raw csv and processed outputs will be deleted for that batch.
 
 In Sagemaker, run:
@@ -214,6 +214,7 @@ python -m pipeline delete --batch-id 2021-01_to_2021-12 --yes
 - **Guard assertions**: every phase asserts data integrity (no null
   dates/titles, unique article/chunk ids, topic/sentiment consistency) and
   fails with a counted, actionable message instead of writing bad parquet.
+- Use `config.py` to update chunking configurations (e.g. Target chunk size, Overlap size) as well as embedding model request settings (e.g. Requests per minute, Batch size).
 
 ## Tests
 
